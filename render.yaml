@@ -15,6 +15,9 @@ services:
     plan: starter
     healthCheckPath: /api/v1/health
     autoDeploy: true
+    # Runs after build, before the new version goes live — applies DB migrations
+    # against DATABASE_URL. If it fails, the deploy is aborted (old version stays up).
+    preDeployCommand: alembic upgrade head
     envVars:
       - key: ENVIRONMENT
         value: production
