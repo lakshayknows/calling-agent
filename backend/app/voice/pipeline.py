@@ -13,6 +13,8 @@ WebSocket connects), so normal REST requests never pay the import cost.
 
 from __future__ import annotations
 
+import asyncio
+
 from starlette.websockets import WebSocket
 
 from app.core.config import Settings
@@ -20,7 +22,15 @@ from app.core.logging import get_logger
 from app.models.agent import Agent
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    Frame,
+    InputAudioRawFrame,
+    StartFrame,
+    TTSSpeakFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -29,6 +39,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.services.openai.llm import OpenAILLMService
@@ -66,6 +77,71 @@ def _render(text: str, variables: dict) -> str:
         return text.format(**variables)
     except (KeyError, IndexError, ValueError):
         return text
+
+
+class GreetingGuard(FrameProcessor):
+    """Protect the opening greeting from being wiped by the callee's pickup audio.
+
+    Outbound callees usually say "Hello?" the instant they answer. That audio would
+    otherwise start a user turn and fire a VAD interruption, which makes the Plivo
+    serializer send ``clearAudio`` and erase the greeting before it's heard.
+
+    While "armed" this guard sits right after ``transport.input()`` and swallows
+    inbound audio/turn frames so no interruption fires during the greeting. It
+    releases the moment the greeting finishes playing — the output transport pushes
+    a ``BotStoppedSpeakingFrame`` upstream, which reaches this processor — after
+    which barge-in works normally for the rest of the call. A timeout is a safety
+    net so a TTS failure can't leave the call permanently deaf.
+    """
+
+    def __init__(self, *, release_after_secs: float = 12.0) -> None:
+        super().__init__()
+        self._armed = True
+        self._release_after_secs = release_after_secs
+        self._timeout_task: asyncio.Task | None = None
+
+    def _release(self, reason: str) -> None:
+        if not self._armed:
+            return
+        self._armed = False
+        log.info("greeting_guard_released", reason=reason)
+        if self._timeout_task is not None:
+            self._timeout_task.cancel()
+            self._timeout_task = None
+
+    async def _release_after_timeout(self) -> None:
+        try:
+            await asyncio.sleep(self._release_after_secs)
+        except asyncio.CancelledError:
+            return
+        self._timeout_task = None
+        self._release("timeout")
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        # Start the safety-net timer once the pipeline starts.
+        if self._armed and self._timeout_task is None and isinstance(frame, StartFrame):
+            self._timeout_task = asyncio.create_task(self._release_after_timeout())
+
+        # Greeting finished playing (pushed upstream by the output transport).
+        if self._armed and isinstance(frame, BotStoppedSpeakingFrame):
+            self._release("greeting_done")
+
+        # While armed, drop the callee's inbound audio/turn frames so the pickup
+        # "Hello" can't trigger an interruption that clears the greeting. VAD lives
+        # downstream (in the user aggregator), so blocking audio here suppresses it.
+        if (
+            self._armed
+            and direction == FrameDirection.DOWNSTREAM
+            and isinstance(
+                frame,
+                (InputAudioRawFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame),
+            )
+        ):
+            return
+
+        await self.push_frame(frame, direction)
 
 
 async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings) -> None:
@@ -123,9 +199,13 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
+    # Only guard when there's a greeting to protect; otherwise pass straight through.
+    guard = GreetingGuard() if greeting else None
+
     pipeline = Pipeline(
         [
             transport.input(),
+            *([guard] if guard else []),
             stt,
             user_aggregator,
             llm,
