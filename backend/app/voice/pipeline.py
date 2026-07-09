@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 from app.models.agent import Agent
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     Frame,
@@ -193,10 +194,23 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
     if greeting:
         messages.append({"role": "assistant", "content": greeting})
 
+    # Telephony lines are noisy and echo the bot's own audio back. Defaults
+    # (confidence 0.7 / start 0.2 / stop 0.2 / min_volume 0.6) treat that as
+    # the caller speaking and fire spurious interruptions, so the agent never
+    # finishes a reply. Require louder, higher-confidence, sustained speech.
+    vad = SileroVADAnalyzer(
+        params=VADParams(
+            confidence=0.85,
+            start_secs=0.35,
+            stop_secs=0.8,
+            min_volume=0.7,
+        )
+    )
+
     context = LLMContext(messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(vad_analyzer=vad),
     )
 
     # Only guard when there's a greeting to protect; otherwise pass straight through.
