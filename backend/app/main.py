@@ -8,6 +8,7 @@ shutdown disposes them cleanly. Run locally with:
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -28,6 +29,12 @@ log = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(debug=settings.debug, json_logs=settings.is_production)
+
+    if settings.run_migrations_on_startup:
+        from app.core.migrations import run_migrations
+
+        await asyncio.to_thread(run_migrations)
+        log.info("migrations_applied")
 
     app.state.db = Database(settings)
     app.state.redis = create_redis(settings)

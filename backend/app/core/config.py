@@ -54,6 +54,11 @@ class Settings(BaseSettings):
 
     redis_url: str = Field(...)
 
+    # Apply Alembic migrations on app startup. Enabled by default so single-
+    # instance deploys (Render free tier, no shell) self-migrate. Disable for
+    # multi-instance/prod where migrations should run as a separate step.
+    run_migrations_on_startup: bool = Field(default=True)
+
     # ---- Providers -------------------------------------------------------
     sarvam_api_key: str = Field(default="")
     plivo_auth_id: str = Field(default="")
