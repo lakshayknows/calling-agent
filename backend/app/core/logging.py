@@ -17,18 +17,22 @@ def configure_logging(*, debug: bool, json_logs: bool) -> None:
     level = logging.DEBUG if debug else logging.INFO
 
     timestamper = structlog.processors.TimeStamper(fmt="iso", utc=True)
+    # NOTE: these processors must be compatible with PrintLoggerFactory below.
+    # `structlog.stdlib.*` processors require a stdlib logger (they read `.name`
+    # / levels off it) and crash with PrintLogger — use the plain processors.
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
+        structlog.processors.add_log_level,
         timestamper,
         structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
     ]
 
     if json_logs:
+        # JSON needs exceptions rendered into an "exception" field.
+        shared_processors.append(structlog.processors.format_exc_info)
         renderer: structlog.types.Processor = structlog.processors.JSONRenderer()
     else:
+        # ConsoleRenderer formats exceptions itself (prettier); don't pre-format.
         renderer = structlog.dev.ConsoleRenderer(colors=True)
 
     structlog.configure(
