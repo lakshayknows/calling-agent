@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     sarvam_api_key: str = Field(default="")
     plivo_auth_id: str = Field(default="")
     plivo_auth_token: str = Field(default="")
+    plivo_base_url: str = Field(default="https://api.plivo.com")
+    # Default caller-ID (a voice-enabled Plivo number you own).
+    plivo_caller_id: str = Field(default="")
+    # Prepended to bare local numbers with no country code (India = 91).
+    default_country_code: str = Field(default="91")
+    # Shared secret guarding the call-test endpoint (DB-independent). If empty,
+    # the test endpoint is disabled.
+    smoke_test_token: str = Field(default="")
     openrouter_api_key: str = Field(default="")
 
     # Cloudflare R2 (used from Feature 5 — recordings). Optional until then.
