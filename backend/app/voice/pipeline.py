@@ -80,60 +80,63 @@ def _render(text: str, variables: dict) -> str:
         return text
 
 
-class GreetingGuard(FrameProcessor):
-    """Protect the opening greeting from being wiped by the callee's pickup audio.
+class InputGate(FrameProcessor):
+    """Half-duplex echo gate — makes the agent usable on speakerphone.
 
-    Outbound callees usually say "Hello?" the instant they answer. That audio would
-    otherwise start a user turn and fire a VAD interruption, which makes the Plivo
-    serializer send ``clearAudio`` and erase the greeting before it's heard.
+    Sits right after ``transport.input()`` and DROPS the caller's inbound audio /
+    turn frames whenever the bot is speaking, so the bot never transcribes its own
+    voice echoing back through the phone (severe on speaker) and background noise
+    during the bot's turn can't interrupt it. The gate opens the moment the bot
+    finishes so the caller is heard normally between turns.
 
-    While "armed" this guard sits right after ``transport.input()`` and swallows
-    inbound audio/turn frames so no interruption fires during the greeting. It
-    releases the moment the greeting finishes playing — the output transport pushes
-    a ``BotStoppedSpeakingFrame`` upstream, which reaches this processor — after
-    which barge-in works normally for the rest of the call. A timeout is a safety
-    net so a TTS failure can't leave the call permanently deaf.
+    Bot speaking state is tracked from ``BotStartedSpeakingFrame`` /
+    ``BotStoppedSpeakingFrame`` (pushed by the output transport and seen here
+    regardless of direction). The gate starts CLOSED when there's an opening
+    greeting so the callee's "Hello?" can't wipe it. A per-turn safety timer
+    reopens the gate if a bot turn never reports finishing, so a TTS hiccup can't
+    leave the call permanently deaf.
     """
 
-    def __init__(self, *, release_after_secs: float = 12.0) -> None:
+    def __init__(self, *, start_closed: bool, max_gate_secs: float = 20.0) -> None:
         super().__init__()
-        self._armed = True
-        self._release_after_secs = release_after_secs
-        self._timeout_task: asyncio.Task | None = None
+        self._bot_speaking = start_closed
+        self._max_gate_secs = max_gate_secs
+        self._safety_task: asyncio.Task | None = None
 
-    def _release(self, reason: str) -> None:
-        if not self._armed:
-            return
-        self._armed = False
-        log.info("greeting_guard_released", reason=reason)
-        if self._timeout_task is not None:
-            self._timeout_task.cancel()
-            self._timeout_task = None
+    def _arm_safety(self) -> None:
+        if self._safety_task is not None:
+            self._safety_task.cancel()
+        self._safety_task = asyncio.create_task(self._safety_release())
 
-    async def _release_after_timeout(self) -> None:
+    async def _safety_release(self) -> None:
         try:
-            await asyncio.sleep(self._release_after_secs)
+            await asyncio.sleep(self._max_gate_secs)
         except asyncio.CancelledError:
             return
-        self._timeout_task = None
-        self._release("timeout")
+        self._safety_task = None
+        self._bot_speaking = False
+        log.info("input_gate_safety_release")
+
+    def _cancel_safety(self) -> None:
+        if self._safety_task is not None:
+            self._safety_task.cancel()
+            self._safety_task = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 
-        # Start the safety-net timer once the pipeline starts.
-        if self._armed and self._timeout_task is None and isinstance(frame, StartFrame):
-            self._timeout_task = asyncio.create_task(self._release_after_timeout())
+        if isinstance(frame, StartFrame) and self._bot_speaking:
+            self._arm_safety()  # protect the opening greeting
+        elif isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+            self._arm_safety()
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_speaking = False
+            self._cancel_safety()
 
-        # Greeting finished playing (pushed upstream by the output transport).
-        if self._armed and isinstance(frame, BotStoppedSpeakingFrame):
-            self._release("greeting_done")
-
-        # While armed, drop the callee's inbound audio/turn frames so the pickup
-        # "Hello" can't trigger an interruption that clears the greeting. VAD lives
-        # downstream (in the user aggregator), so blocking audio here suppresses it.
+        # Suppress the caller's mic while the bot talks → no echo/self-interrupt.
         if (
-            self._armed
+            self._bot_speaking
             and direction == FrameDirection.DOWNSTREAM
             and isinstance(
                 frame,
@@ -213,13 +216,14 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
         user_params=LLMUserAggregatorParams(vad_analyzer=vad),
     )
 
-    # Only guard when there's a greeting to protect; otherwise pass straight through.
-    guard = GreetingGuard() if greeting else None
+    # Half-duplex echo gate — always on (essential for speakerphone). Starts
+    # closed when there's a greeting so the callee's pickup audio can't wipe it.
+    gate = InputGate(start_closed=bool(greeting))
 
     pipeline = Pipeline(
         [
             transport.input(),
-            *([guard] if guard else []),
+            gate,
             stt,
             user_aggregator,
             llm,
