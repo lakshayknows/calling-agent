@@ -25,6 +25,22 @@ from app.core.redis import close_redis, create_redis
 log = get_logger(__name__)
 
 
+async def _preload_voice(app: FastAPI) -> None:
+    """Import Pipecat and warm the Silero VAD model in a worker thread."""
+    def _warm() -> None:
+        import app.voice.pipeline  # noqa: F401 - triggers the heavy Pipecat import
+        from pipecat.audio.vad.silero import SileroVADAnalyzer
+
+        SileroVADAnalyzer()  # load the onnx model once
+
+    try:
+        await asyncio.to_thread(_warm)
+        app.state.voice_ready = True
+        log.info("voice_preloaded")
+    except Exception:
+        log.error("voice_preload_failed", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -38,6 +54,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.db = Database(settings)
     app.state.redis = create_redis(settings)
+
+    # Warm the heavy Pipecat import + VAD model off the event loop so the first
+    # call starts fast instead of paying ~30-40s of import latency mid-call.
+    app.state.voice_ready = False
+    if settings.preload_voice:
+        app.state._preload_task = asyncio.create_task(_preload_voice(app))
+
     log.info("startup_complete", environment=settings.environment)
 
     try:

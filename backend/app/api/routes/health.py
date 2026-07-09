@@ -7,7 +7,7 @@ dependencies are reachable.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sqlalchemy import text
 
 from app.api.deps import DBSession, RedisDep, SettingsDep
@@ -25,7 +25,7 @@ async def health(settings: SettingsDep) -> dict[str, str]:
 
 
 @router.get("/health/ready")
-async def readiness(db: DBSession, redis: RedisDep) -> dict[str, object]:
+async def readiness(request: Request, db: DBSession, redis: RedisDep) -> dict[str, object]:
     checks: dict[str, str] = {}
 
     try:
@@ -40,5 +40,13 @@ async def readiness(db: DBSession, redis: RedisDep) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001
         checks["redis"] = f"error: {exc.__class__.__name__}"
 
+    # Informational: whether the Pipecat voice stack is warmed (not part of the
+    # healthy gate — the REST API is fine before voice finishes preloading).
+    voice_ready = bool(getattr(request.app.state, "voice_ready", False))
+
     healthy = all(v == "ok" for v in checks.values())
-    return {"status": "ready" if healthy else "degraded", "checks": checks}
+    return {
+        "status": "ready" if healthy else "degraded",
+        "checks": checks,
+        "voice": "ready" if voice_ready else "loading",
+    }

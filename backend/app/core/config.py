@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     # multi-instance/prod where migrations should run as a separate step.
     run_migrations_on_startup: bool = Field(default=True)
 
+    # Import Pipecat + load voice models at startup (in the background) so the
+    # first call doesn't pay ~30-40s of import latency mid-call.
+    preload_voice: bool = Field(default=True)
+
     # ---- Providers -------------------------------------------------------
     sarvam_api_key: str = Field(default="")
     plivo_auth_id: str = Field(default="")
