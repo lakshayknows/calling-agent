@@ -173,9 +173,12 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
     language = _language(agent.language)
     voice = agent.voice if agent.voice in _VALID_V2_VOICES else _DEFAULT_VOICE
 
+    # Match Plivo's 8 kHz telephony rate end to end so we don't resample audio
+    # every frame (saves CPU + latency on constrained instances).
     stt = SarvamSTTService(
         api_key=settings.sarvam_api_key,
         model=_STT_MODEL,
+        sample_rate=8000,
         params=SarvamSTTService.InputParams(language=language),
     )
     llm = OpenAILLMService(
@@ -187,6 +190,7 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
         api_key=settings.sarvam_api_key,
         model=_TTS_MODEL,
         voice_id=voice,
+        sample_rate=8000,
         params=SarvamTTSService.InputParams(language=language),
     )
 
