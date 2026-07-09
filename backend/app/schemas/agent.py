@@ -72,4 +72,5 @@ class AgentPreviewRequest(BaseModel):
 class AgentPreviewResponse(BaseModel):
     reply: str
     model: str
-    usage: dict[str, int] = Field(default_factory=dict)
+    # OpenRouter usage includes floats (cost) and nested dicts — keep it lenient.
+    usage: dict[str, Any] = Field(default_factory=dict)
