@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     # the test endpoint is disabled.
     smoke_test_token: str = Field(default="")
     openrouter_api_key: str = Field(default="")
+    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
+    # Optional attribution headers OpenRouter uses for its rankings.
+    openrouter_referer: str = Field(default="https://calling-agent.onrender.com")
+    openrouter_title: str = Field(default="Agentic Calling Platform")
 
     # Cloudflare R2 (used from Feature 5 — recordings). Optional until then.
     r2_account_id: str = Field(default="")
