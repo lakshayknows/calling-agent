@@ -22,10 +22,18 @@ from app.core.config import Settings
 
 
 def _build_connect_args(settings: Settings) -> dict[str, object]:
-    """SSL is required for Supabase; skip it for local/plain connections."""
+    """SSL is required for Supabase; skip it for local/plain connections.
+
+    By default we encrypt without verifying the certificate (equivalent to
+    libpq `sslmode=require`), because Supabase's pooler cert fails full
+    verification. Set `db_ssl_verify=true` to require a verifiable cert.
+    """
     url = settings.database_url
     if "supabase" in url or settings.is_production:
         ctx = ssl.create_default_context()
+        if not settings.db_ssl_verify:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         return {"ssl": ctx}
     return {}
 

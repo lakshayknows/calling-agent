@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     db_echo: bool = Field(default=False)
     db_pool_size: int = 10
     db_max_overflow: int = 20
+    # Managed Postgres (Supabase pooler) presents certs that fail full
+    # verification. Default to encrypt-without-verify (libpq sslmode=require).
+    # Set true only if you supply a matching CA / use the verifiable direct host.
+    db_ssl_verify: bool = Field(default=False)
 
     redis_url: str = Field(...)
 
@@ -91,7 +95,10 @@ class Settings(BaseSettings):
         wants_tls = "--tls" in v or v.startswith("rediss://")
         if match:
             v = match.group(0)
-        # Upgrade to TLS scheme when TLS was requested (Upstash requires it).
+        # Upstash always requires TLS — force it regardless of how the URL was
+        # provided, so a plain redis:// value doesn't get refused.
+        if "upstash.io" in v:
+            wants_tls = True
         if wants_tls and v.startswith("redis://"):
             v = v.replace("redis://", "rediss://", 1)
         return v
