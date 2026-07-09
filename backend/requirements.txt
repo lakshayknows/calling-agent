@@ -1,0 +1,18 @@
+# Pinned mirror of pyproject.toml [project.dependencies] for Railway/Docker builds.
+# Install with:  pip install -r requirements.txt
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+pydantic>=2.9.0
+email-validator>=2.2.0
+pydantic-settings>=2.6.0
+sqlalchemy>=2.0.36
+asyncpg>=0.30.0
+alembic>=1.14.0
+greenlet>=3.1.0
+redis>=5.2.0
+pyjwt>=2.10.0
+bcrypt>=4.2.0
+httpx>=0.28.0
+websockets>=13.1
+structlog>=24.4.0

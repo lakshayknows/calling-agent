@@ -1,0 +1,42 @@
+# Local development stack.
+#
+# By default the backend talks to your cloud Supabase + Upstash (via backend/.env),
+# so you don't need the local postgres/redis at all. If you prefer fully-offline
+# dev, start the `local-datastores` profile and point DATABASE_URL / REDIS_URL at
+# the services below:
+#   DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentic
+#   REDIS_URL=redis://redis:6379
+#
+#   docker compose --profile local-datastores up
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8000"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["local-datastores"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agentic
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["local-datastores"]
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:

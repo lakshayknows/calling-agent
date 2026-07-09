@@ -1,0 +1,53 @@
+# Render blueprint for the backend API.
+# In Render: New + > Blueprint > point at this repo. It builds backend/Dockerfile
+# and prompts you to fill the secret env vars below (they are never committed).
+#
+# NOTE on Supabase: Render egress is IPv4. Supabase's DIRECT host
+# (db.<ref>.supabase.co:5432) is IPv6-only and will fail to connect. Use the
+# Supabase "Session pooler" connection string instead (host looks like
+# aws-0-<region>.pooler.supabase.com, port 5432/6543) for DATABASE_URL here.
+services:
+  - type: web
+    name: agentic-calling-backend
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      # Set to your frontend origin(s) once deployed to Vercel.
+      - key: CORS_ORIGINS
+        value: http://localhost:3000
+      # Render injects the public URL; set this to the same value after first deploy.
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: PLIVO_AUTH_ID
+        sync: false
+      - key: PLIVO_AUTH_TOKEN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # Cloudflare R2 — add when you enable recording (Feature 4+).
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_PUBLIC_BASE_URL
+        sync: false

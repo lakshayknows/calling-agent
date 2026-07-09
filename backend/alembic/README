@@ -1,0 +1,10 @@
+Async Alembic environment.
+
+Generate a migration after adding/altering models:
+    alembic revision --autogenerate -m "add users and organizations"
+
+Apply migrations:
+    alembic upgrade head
+
+Roll back one step:
+    alembic downgrade -1
