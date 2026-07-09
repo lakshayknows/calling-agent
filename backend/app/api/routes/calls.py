@@ -19,7 +19,7 @@ from typing import Annotated
 from urllib.parse import quote
 from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, Form, Header, Query, Response, WebSocket
+from fastapi import APIRouter, Form, Header, Query, Request, Response, WebSocket
 from pydantic import BaseModel, Field
 
 from app.api.deps import AuthContextDep, DBSession, SettingsDep
@@ -208,10 +208,20 @@ async def place_agent_call(
 
 @router.get("/stream-answer")
 async def stream_answer(
-    settings: SettingsDep, agent_id: Annotated[str, Query()]
+    request: Request, settings: SettingsDep, agent_id: Annotated[str, Query()]
 ) -> Response:
-    """PUBLIC. Plivo fetches this on answer; returns Stream XML pointing at our WS."""
-    ws_base = settings.public_base_url.replace("https://", "wss://").replace("http://", "ws://")
+    """PUBLIC. Plivo fetches this on answer; returns Stream XML pointing at our WS.
+
+    Derive the WebSocket host from the incoming request (Plivo hits us at the
+    real public host) so this works even when PUBLIC_BASE_URL isn't configured.
+    A configured non-localhost PUBLIC_BASE_URL takes precedence.
+    """
+    base = settings.public_base_url
+    if base and "localhost" not in base and "127.0.0.1" not in base:
+        ws_base = base.replace("https://", "wss://").replace("http://", "ws://")
+    else:
+        host = request.headers.get("host") or request.url.netloc
+        ws_base = f"wss://{host}"
     ws_url = f"{ws_base}{settings.api_v1_prefix}/calls/stream?agent_id={agent_id}"
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
