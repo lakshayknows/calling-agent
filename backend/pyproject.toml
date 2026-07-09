@@ -33,6 +33,9 @@ dependencies = [
 
     # Observability
     "structlog>=24.4.0",
+
+    # Real-time voice pipeline (Feature 4)
+    "pipecat-ai[sarvam,openai,silero]==1.5.0",
 ]
 
 [project.optional-dependencies]
