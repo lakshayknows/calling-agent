@@ -36,6 +36,7 @@ dependencies = [
 
     # Real-time voice pipeline (Feature 4)
     "pipecat-ai[sarvam,openai,silero]==1.5.0",
+    "cerebras-cloud-sdk>=1.67.0",
 ]
 
 [project.optional-dependencies]
@@ -60,3 +61,7 @@ plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

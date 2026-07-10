@@ -13,7 +13,7 @@ Last updated: 2026-07-10.
 - **Domain:** `https://call.karbonz.com`  →  VPS IP `66.94.119.5`
 - **OS:** Windows Server, **IIS 10** (shares the box with other sites)
 - **App runtime:** Python venv at `C:\inetpub\callkarbonzapi\` (currently Python 3.14; project targets 3.12), `uvicorn app.main:app` bound to **`127.0.0.1:8000`** (localhost only — IIS fronts it).
-- **Reverse proxy:** IIS + **ARR (Application Request Routing)** + **URL Rewrite**, with the **WebSocket Protocol** feature enabled. A `web.config` in the site's physical folder rewrites all paths to `http://127.0.0.1:8000/{R:1}` and enables `<webSocket>`. ARR **Server Proxy Settings → Enable proxy** must be ON.
+- **Reverse proxy:** IIS + **ARR (Application Request Routing)** + **URL Rewrite**, with the **WebSocket Protocol** feature enabled. A `web.config` in the site's physical folder rewrites all paths to `http://127.0.0.1:8000/{R:1}` and enables `<webSocket>`. ARR **Server Proxy Settings → Enable proxy** must be ON. Also in ARR **Server Proxy Settings → Response buffer threshold**, ensure it is set to **`0` KB** (disabled) so real-time audio WebSocket frames are flushed instantaneously without ARR queueing.
 - **TLS:** Let's Encrypt cert via **win-acme** (`wacs.exe`), bound to the `call.karbonz.com:443` IIS binding, auto-renewing. (Required: Plivo audio streaming only connects over `wss://` with a valid cert.)
 
 ### web.config (site physical path)
@@ -37,9 +37,9 @@ cd C:\inetpub\callkarbonzapi
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt        # after dependency changes
 alembic upgrade head                    # after model/migration changes (also auto-runs on startup)
-uvicorn app.main:app --host 127.0.0.1 --port 8000        # dev
-# Production: run WITHOUT --reload as an NSSM service so it survives logoff/reboot:
-#   nssm install CallingAgent "<venv>\Scripts\python.exe" "-m uvicorn app.main:app --host 127.0.0.1 --port 8000"
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-use-colors --timeout-keep-alive 5        # dev
+# Production: run WITHOUT --reload as an NSSM service with TCP_NODELAY active so it survives logoff/reboot:
+#   nssm install CallingAgent "<venv>\Scripts\python.exe" "-m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-use-colors --timeout-keep-alive 5"
 #   nssm set CallingAgent AppDirectory "C:\inetpub\callkarbonzapi"
 ```
 `.env` changes require a **full restart** (settings are cached at startup; `--reload` only watches `.py`).
@@ -122,6 +122,7 @@ Place an agentic call (via Plivo REST, using the caller ID + the stream-answer U
 9. **Real-time latency on Render free**: 0.1 vCPU can't run the pipeline in real time → moved to VPS. Also set STT/TTS to 8 kHz to skip per-frame resampling.
 10. **VPS/IIS**: app must run + IIS ARR reverse-proxy with WebSocket + valid win-acme cert. `PUBLIC_BASE_URL` must be `https://` with no trailing slash (stream-answer now forces `wss://` + rstrips defensively).
 11. **Known open bug**: `PATCH /agents/{id}` returns 500 (update path) — GET/POST/preview fine. Workaround: create a fresh agent. Needs the traceback to fix.
+12. **Real-time voice latency optimization (-600 to -800ms)**: VAD `stop_secs` reduced from 0.8s to 0.45s (-350ms); LLM system prompt enforces short first sentences (<12 words) so TTS begins immediately; `LatencyMasker` pushes quick `TTSSpeakFrame("Sure, one second...")` on tool/function calls; ARR `Response buffer threshold = 0 KB` and Uvicorn `TCP_NODELAY` (`--timeout-keep-alive 5`) eliminate socket queue delays.
 
 ---
 
