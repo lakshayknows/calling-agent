@@ -186,6 +186,13 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
         api_key=settings.openrouter_api_key,
         base_url=settings.openrouter_base_url,
         model=agent.llm_model,
+        params=OpenAILLMService.InputParams(
+            temperature=agent.temperature,
+            max_tokens=150,  # phone replies are short; bound generation time
+            # Prefer ultra-low-latency OpenRouter providers (Groq ~3x faster
+            # time-to-first-token). Falls back gracefully for unhosted models.
+            extra={"provider": {"order": ["Groq", "Cerebras", "DeepInfra"]}},
+        ),
     )
     tts = SarvamTTSService(
         api_key=settings.sarvam_api_key,
