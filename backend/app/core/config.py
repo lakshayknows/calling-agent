@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     plivo_base_url: str = Field(default="https://api.plivo.com")
     # Default caller-ID (a voice-enabled Plivo number you own).
     plivo_caller_id: str = Field(default="")
+    plivo_phone_number: str = Field(default="")
     # Prepended to bare local numbers with no country code (India = 91).
     default_country_code: str = Field(default="91")
     # Shared secret guarding the call-test endpoint (DB-independent). If empty,
@@ -80,6 +81,10 @@ class Settings(BaseSettings):
     # Optional attribution headers OpenRouter uses for its rankings.
     openrouter_referer: str = Field(default="https://call.karbonz.com")
     openrouter_title: str = Field(default="Agentic Calling Platform")
+
+    # Cerebras Fast Inference Cloud API
+    cerebras_api_key: str = Field(default="")
+    cerebras_base_url: str = Field(default="https://api.cerebras.ai/v1")
 
     # Cloudflare R2 (used from Feature 5 — recordings). Optional until then.
     r2_account_id: str = Field(default="")
@@ -94,6 +99,12 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # Normalizers
     # ------------------------------------------------------------------ #
+    @model_validator(mode="after")
+    def _fallback_caller_id(self) -> Settings:
+        if not self.plivo_caller_id and self.plivo_phone_number:
+            self.plivo_caller_id = self.plivo_phone_number
+        return self
+
     @field_validator("database_url")
     @classmethod
     def _normalize_database_url(cls, v: str) -> str:

@@ -16,7 +16,7 @@ class AgentBase(BaseModel):
     description: str | None = Field(default=None, max_length=1000)
     system_prompt: str = Field(default="", max_length=20000)
     greeting: str | None = Field(default=None, max_length=2000)
-    llm_model: str = Field(default="openai/gpt-4o-mini", max_length=120)
+    llm_model: str = Field(default="gpt-oss-120b", max_length=120)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     voice: str = Field(default="meera", max_length=60)
     language: str = Field(default="en-IN", max_length=16)

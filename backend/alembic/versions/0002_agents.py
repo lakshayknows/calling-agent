@@ -27,7 +27,7 @@ def upgrade() -> None:
         sa.Column("description", sa.String(length=1000), nullable=True),
         sa.Column("system_prompt", sa.Text(), nullable=False, server_default=""),
         sa.Column("greeting", sa.Text(), nullable=True),
-        sa.Column("llm_model", sa.String(length=120), nullable=False, server_default="openai/gpt-4o-mini"),
+        sa.Column("llm_model", sa.String(length=120), nullable=False, server_default="gpt-oss-120b"),
         sa.Column("temperature", sa.Float(), nullable=False, server_default="0.7"),
         sa.Column("voice", sa.String(length=60), nullable=False, server_default="meera"),
         sa.Column("language", sa.String(length=16), nullable=False, server_default="en-IN"),

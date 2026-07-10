@@ -2,7 +2,7 @@
 
 Runs one Pipecat pipeline per connected call:
 
-    Plivo WS  ->  Sarvam STT  ->  [agent context]  ->  OpenRouter LLM  ->  Sarvam TTS  ->  Plivo WS
+    Plivo WS  ->  Sarvam STT  ->  [agent context]  ->  Cerebras LLM  ->  Sarvam TTS  ->  Plivo WS
                                         ^ Silero VAD = turn-taking + barge-in
 
 Pipecat is the orchestration adapter for the real-time path; the agent's config
@@ -14,12 +14,17 @@ WebSocket connects), so normal REST requests never pay the import cost.
 from __future__ import annotations
 
 import asyncio
+import random
+import time
+from collections.abc import Callable
+from typing import cast
 
 from starlette.websockets import WebSocket
 
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.models.agent import Agent
+from app.providers.llm.cerebras import _normalize_model as _normalize_cerebras_model
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -34,9 +39,8 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
@@ -44,7 +48,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
-from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.cerebras.llm import CerebrasLLMService
 from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
@@ -52,6 +56,9 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
+from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.workers.runner import WorkerRunner
 
 log = get_logger(__name__)
 
@@ -123,6 +130,20 @@ class InputGate(FrameProcessor):
             self._safety_task.cancel()
             self._safety_task = None
 
+    def _schedule_gate_release(self, delay: float = 0.065) -> None:
+        """Add a 65ms release delay after BotStoppedSpeakingFrame to swallow acoustic tail echo."""
+        if self._safety_task is not None:
+            self._safety_task.cancel()
+        self._safety_task = asyncio.create_task(self._delayed_release(delay))
+
+    async def _delayed_release(self, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        self._bot_speaking = False
+        self._safety_task = None
+
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 
@@ -132,8 +153,7 @@ class InputGate(FrameProcessor):
             self._bot_speaking = True
             self._arm_safety()
         elif isinstance(frame, BotStoppedSpeakingFrame):
-            self._bot_speaking = False
-            self._cancel_safety()
+            self._schedule_gate_release(delay=0.065)  # 65ms release delay to swallow acoustic tail echo
 
         # Suppress the caller's mic while the bot talks → no echo/self-interrupt.
         if (
@@ -146,6 +166,76 @@ class InputGate(FrameProcessor):
         ):
             return
 
+        await self.push_frame(frame, direction)
+
+
+class LatencyMasker(FrameProcessor):
+    """Pushes soft acoustic/conversational filler frames during tool calls or complex turns.
+
+    When an AI agent triggers a function/tool execution or begins a complex reasoning step,
+    the user would otherwise experience dead silence while waiting for tool completion and LLM
+    generation. This processor catches function call frames (or is triggered after user turn completion)
+    and immediately queues a soft acoustic filler like `TTSSpeakFrame("Hmm...")` or
+    `TTSSpeakFrame("One second...")` so the caller hears instant responsiveness while background
+    reasoning happens, without sounding like a repetitive robot.
+    """
+
+    _FILLER_PHRASES = ["Hmm...", "One moment...", "Let me check...", "Sure..."]
+
+    def __init__(
+        self,
+        get_task: Callable[[], PipelineWorker | None],
+        filler: str = "Hmm...",
+    ) -> None:
+        super().__init__()
+        self._get_task = get_task
+        self._filler = filler
+        self._last_mask_time = 0.0
+        self._backchannel_task: asyncio.Task | None = None
+
+    def _cancel_backchannel(self) -> None:
+        if self._backchannel_task is not None:
+            self._backchannel_task.cancel()
+            self._backchannel_task = None
+
+    def _schedule_backchannel(self, delay: float = 0.55) -> None:
+        self._cancel_backchannel()
+        self._backchannel_task = asyncio.create_task(self._delayed_backchannel(delay))
+
+    async def _delayed_backchannel(self, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        self._backchannel_task = None
+        await self._maybe_push_filler(
+            reason="conversational_bridge",
+            phrase=random.choice(self._FILLER_PHRASES),
+        )
+
+    async def _maybe_push_filler(self, reason: str, phrase: str | None = None) -> None:
+        now = time.monotonic()
+        if now - self._last_mask_time > 2.5:
+            self._last_mask_time = now
+            task = self._get_task()
+            if task:
+                target_phrase = phrase or self._filler
+                log.info("latency_mask_triggered", reason=reason, phrase=target_phrase)
+                await task.queue_frames([TTSSpeakFrame(target_phrase)])
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        name = type(frame).__name__
+        if name in (
+            "FunctionCallInProgressFrame",
+            "FunctionCallRequestFrame",
+            "FunctionCallFrame",
+        ):
+            await self._maybe_push_filler(reason=name)
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            self._schedule_backchannel(delay=0.55)
+        elif isinstance(frame, (BotStartedSpeakingFrame, TTSSpeakFrame, UserStartedSpeakingFrame)) or name in ("LLMFullResponseStartFrame", "LLMResponseStartFrame"):
+            self._cancel_backchannel()
         await self.push_frame(frame, direction)
 
 
@@ -182,17 +272,10 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
         sample_rate=8000,
         params=SarvamSTTService.InputParams(language=language),
     )
-    llm = OpenAILLMService(
-        api_key=settings.openrouter_api_key,
-        base_url=settings.openrouter_base_url,
-        model=agent.llm_model,
-        params=OpenAILLMService.InputParams(
-            temperature=agent.temperature,
-            max_tokens=150,  # phone replies are short; bound generation time
-            # Prefer ultra-low-latency OpenRouter providers (Groq ~3x faster
-            # time-to-first-token). Falls back gracefully for unhosted models.
-            extra={"provider": {"order": ["Groq", "Cerebras", "DeepInfra"]}},
-        ),
+    llm = CerebrasLLMService(
+        api_key=settings.cerebras_api_key,
+        base_url=settings.cerebras_base_url,
+        model=_normalize_cerebras_model(agent.llm_model),
     )
     tts = SarvamTTSService(
         api_key=settings.sarvam_api_key,
@@ -203,14 +286,14 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
     )
 
     greeting = _render(agent.greeting or "", agent.custom_variables or {}).strip()
-    # Phone calls need short, spoken-style turns — long replies feel sluggish and
-    # take longer to synthesize. Nudge every agent toward brevity.
-    phone_style = (
-        " You are on a live phone call. Reply in one or two short, natural spoken "
-        "sentences. Never use lists, markdown, or long explanations."
+    base_prompt = (agent.system_prompt or "You are a helpful phone assistant.").strip()
+    voice_system_prompt = (
+        f"{base_prompt}\n\n"
+        "CRITICAL VOICE INSTRUCTION: Speak in short, concise sentences suitable for a live telephone call. "
+        "Never use long introductory clauses, bullet points, or markdown formatting. "
+        "Your very first clause MUST be under 6 words and end with a comma or period right away (e.g., 'Sure, I can help with that.') so audio synthesis starts instantaneously."
     )
-    system_prompt = (agent.system_prompt or "You are a helpful phone assistant.") + phone_style
-    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    messages: list[dict] = [{"role": "system", "content": voice_system_prompt}]
     if greeting:
         messages.append({"role": "assistant", "content": greeting})
 
@@ -218,26 +301,45 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
     # (confidence 0.7 / start 0.2 / stop 0.2 / min_volume 0.6) treat that as
     # the caller speaking and fire spurious interruptions, so the agent never
     # finishes a reply. Require louder, higher-confidence, sustained speech.
+    # Note: stop_secs=0.30 is tuned for fast conversational turns without silence gaps.
     vad = SileroVADAnalyzer(
         params=VADParams(
             # Keep noise/echo rejection high so the caller's turn ends cleanly
             # (loose thresholds let ambient noise hold the turn open -> big lag).
             confidence=0.85,
-            start_secs=0.35,
-            stop_secs=0.5,   # a bit snappier than the 0.8 default
+            start_secs=0.20,
+            stop_secs=0.30,  # 0.30s for fast conversational turns without silence gaps
             min_volume=0.7,
         )
     )
 
-    context = LLMContext(messages)
+    context = LLMContext(cast(list[LLMContextMessage], messages))
+    user_turn_strategies = UserTurnStrategies(
+        start=[VADUserTurnStartStrategy(enable_interruptions=agent.interruptible)]
+    )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=vad),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=vad,
+            user_turn_strategies=user_turn_strategies,
+        ),
     )
 
     # Half-duplex echo gate — always on (essential for speakerphone). Starts
     # closed when there's a greeting so the callee's pickup audio can't wipe it.
     gate = InputGate(start_closed=bool(greeting))
+
+    # Latency masker queues instant filler audio on function/tool calls or complex turns
+    task: PipelineWorker | None = None
+    masker = LatencyMasker(get_task=lambda: task)
+
+    @llm.event_handler("on_function_calls")
+    async def _on_function_calls(_service, _function_calls):  # noqa: ANN001
+        await masker._maybe_push_filler(reason="on_function_calls")
+
+    @llm.event_handler("on_function_start")
+    async def _on_function_start(_service, _function_name, _arguments):  # noqa: ANN001
+        await masker._maybe_push_filler(reason="on_function_start")
 
     pipeline = Pipeline(
         [
@@ -246,18 +348,18 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
             stt,
             user_aggregator,
             llm,
+            masker,
             tts,
             transport.output(),
             assistant_aggregator,
         ]
     )
 
-    task = PipelineTask(
+    task = PipelineWorker(
         pipeline,
         params=PipelineParams(
             audio_in_sample_rate=8000,
             audio_out_sample_rate=8000,
-            allow_interruptions=agent.interruptible,
             enable_metrics=True,
         ),
     )
@@ -272,5 +374,5 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
         log.info("voice_call_end", agent_id=str(agent.id))
         await task.cancel()
 
-    runner = PipelineRunner(handle_sigint=False)
+    runner = WorkerRunner(handle_sigint=False)
     await runner.run(task)

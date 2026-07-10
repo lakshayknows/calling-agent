@@ -48,7 +48,15 @@ def configure_logging(*, debug: bool, json_logs: bool) -> None:
     root.handlers = [handler]
     root.setLevel(level)
 
-    for noisy in ("uvicorn.access", "sqlalchemy.engine.Engine"):
+    for noisy in (
+        "uvicorn.access",
+        "uvicorn.protocols.websockets",
+        "websockets",
+        "websockets.server",
+        "websockets.protocol",
+        "sqlalchemy.engine.Engine",
+        "pipecat.audio.vad",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING if not debug else logging.INFO)
 
 

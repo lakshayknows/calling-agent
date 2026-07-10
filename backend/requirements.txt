@@ -19,3 +19,4 @@ structlog>=24.4.0
 
 # Real-time voice pipeline (Feature 4): Plivo <-> Sarvam STT/TTS <-> LLM, VAD/barge-in
 pipecat-ai[sarvam,openai,silero]==1.5.0
+cerebras-cloud-sdk>=1.67.0
