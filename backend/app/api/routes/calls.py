@@ -172,9 +172,26 @@ class AgentCallRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+def _public_http_base(settings: Settings, request: Request) -> str:
+    """Public https base for Plivo webhook URLs.
+
+    Prefer a configured non-localhost PUBLIC_BASE_URL; otherwise derive it from
+    the incoming request host (the caller reaches us at the real public host), so
+    call placement works even when PUBLIC_BASE_URL isn't set on the deployment.
+    Mirrors the WS-host derivation in `stream_answer`.
+    """
+    base = settings.public_base_url
+    if base and "localhost" not in base and "127.0.0.1" not in base:
+        return base.rstrip("/")
+    host = request.headers.get("host") or request.url.netloc
+    proto = request.headers.get("x-forwarded-proto", "https")
+    return f"{proto}://{host}"
+
+
 @router.post("/agent", response_model=TestCallResponse)
 async def place_agent_call(
     body: AgentCallRequest,
+    request: Request,
     ctx: AuthContextDep,
     db: DBSession,
     settings: SettingsDep,
@@ -188,11 +205,9 @@ async def place_agent_call(
 
     to = normalize_number(body.to, default_country_code=settings.default_country_code)
     frm = normalize_number(from_number, default_country_code=settings.default_country_code)
-    answer_url = (
-        f"{settings.public_base_url}{settings.api_v1_prefix}/calls/stream-answer"
-        f"?agent_id={agent.id}"
-    )
-    hangup_url = f"{settings.public_base_url}{settings.api_v1_prefix}/calls/status"
+    base = _public_http_base(settings, request)
+    answer_url = f"{base}{settings.api_v1_prefix}/calls/stream-answer?agent_id={agent.id}"
+    hangup_url = f"{base}{settings.api_v1_prefix}/calls/status"
 
     handle = await PlivoProvider(settings).place_call(
         OutboundCallRequest(
@@ -216,9 +231,10 @@ async def stream_answer(
     real public host) so this works even when PUBLIC_BASE_URL isn't configured.
     A configured non-localhost PUBLIC_BASE_URL takes precedence.
     """
-    base = settings.public_base_url
+    base = (settings.public_base_url or "").rstrip("/")
     if base and "localhost" not in base and "127.0.0.1" not in base:
-        ws_base = base.replace("https://", "wss://").replace("http://", "ws://")
+        # Behind a TLS-terminating proxy the public scheme is always https/wss.
+        ws_base = base.replace("https://", "wss://").replace("http://", "wss://")
     else:
         host = request.headers.get("host") or request.url.netloc
         ws_base = f"wss://{host}"
