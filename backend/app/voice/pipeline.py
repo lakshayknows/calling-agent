@@ -2,7 +2,7 @@
 
 Runs one Pipecat pipeline per connected call:
 
-    Plivo WS  ->  Sarvam STT  ->  [agent context]  ->  OpenRouter LLM  ->  Sarvam TTS  ->  Plivo WS
+    Plivo WS  ->  Sarvam STT  ->  [agent context]  ->  Cerebras LLM  ->  Sarvam TTS  ->  Plivo WS
                                         ^ Silero VAD = turn-taking + barge-in
 
 Pipecat is the orchestration adapter for the real-time path; the agent's config
@@ -24,6 +24,7 @@ from starlette.websockets import WebSocket
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.models.agent import Agent
+from app.providers.llm.cerebras import _normalize_model as _normalize_cerebras_model
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -47,7 +48,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
-from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.cerebras.llm import CerebrasLLMService
 from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transcriptions.language import Language
@@ -271,10 +272,10 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
         sample_rate=8000,
         params=SarvamSTTService.InputParams(language=language),
     )
-    llm = OpenAILLMService(
-        api_key=settings.openrouter_api_key,
-        base_url=settings.openrouter_base_url,
-        model=agent.llm_model,
+    llm = CerebrasLLMService(
+        api_key=settings.cerebras_api_key,
+        base_url=settings.cerebras_base_url,
+        model=_normalize_cerebras_model(agent.llm_model),
     )
     tts = SarvamTTSService(
         api_key=settings.sarvam_api_key,

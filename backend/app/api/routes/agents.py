@@ -8,7 +8,7 @@ from fastapi import APIRouter, status
 
 from app.api.deps import AuthContextDep, DBSession, SettingsDep
 from app.providers.base import LLMMessage
-from app.providers.llm.openrouter import OpenRouterProvider
+from app.providers.llm.cerebras import CerebrasProvider
 from app.schemas.agent import (
     AgentCreate,
     AgentPreviewRequest,
@@ -75,7 +75,7 @@ async def preview_agent(
             messages.append(LLMMessage(role=role, content=content))
     messages.append(LLMMessage(role="user", content=body.message))
 
-    provider = OpenRouterProvider(settings)
+    provider = CerebrasProvider(settings)
     result = await provider.complete(
         messages, model=agent.llm_model, temperature=agent.temperature
     )

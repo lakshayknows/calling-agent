@@ -40,7 +40,7 @@ class Agent(Base, UUIDMixin, TimestampMixin):
     greeting: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     llm_model: Mapped[str] = mapped_column(
-        String(120), nullable=False, default="openai/gpt-4o-mini"
+        String(120), nullable=False, default="gpt-oss-120b"
     )
     temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.7)
 
