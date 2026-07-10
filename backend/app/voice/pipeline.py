@@ -196,9 +196,14 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
     )
 
     greeting = _render(agent.greeting or "", agent.custom_variables or {}).strip()
-    messages: list[dict] = [
-        {"role": "system", "content": agent.system_prompt or "You are a helpful phone assistant."}
-    ]
+    # Phone calls need short, spoken-style turns — long replies feel sluggish and
+    # take longer to synthesize. Nudge every agent toward brevity.
+    phone_style = (
+        " You are on a live phone call. Reply in one or two short, natural spoken "
+        "sentences. Never use lists, markdown, or long explanations."
+    )
+    system_prompt = (agent.system_prompt or "You are a helpful phone assistant.") + phone_style
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if greeting:
         messages.append({"role": "assistant", "content": greeting})
 
