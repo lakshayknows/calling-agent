@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="")
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
     # Optional attribution headers OpenRouter uses for its rankings.
-    openrouter_referer: str = Field(default="https://calling-agent.onrender.com")
+    openrouter_referer: str = Field(default="https://call.karbonz.com")
     openrouter_title: str = Field(default="Agentic Calling Platform")
 
     # Cloudflare R2 (used from Feature 5 — recordings). Optional until then.
