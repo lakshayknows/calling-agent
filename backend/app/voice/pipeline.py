@@ -213,10 +213,12 @@ async def run_voice_agent(websocket: WebSocket, agent: Agent, settings: Settings
     # finishes a reply. Require louder, higher-confidence, sustained speech.
     vad = SileroVADAnalyzer(
         params=VADParams(
-            confidence=0.8,
-            start_secs=0.2,
-            stop_secs=0.4,   # respond ~0.4s sooner after the caller stops
-            min_volume=0.6,
+            # Keep noise/echo rejection high so the caller's turn ends cleanly
+            # (loose thresholds let ambient noise hold the turn open -> big lag).
+            confidence=0.85,
+            start_secs=0.35,
+            stop_secs=0.5,   # a bit snappier than the 0.8 default
+            min_volume=0.7,
         )
     )
 
